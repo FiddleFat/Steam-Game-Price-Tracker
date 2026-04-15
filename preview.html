@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Steam Tracker Pro</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+body {
+    margin: 0;
+    font-family: Arial;
+    background: #1b2838;
+    color: #c7d5e0;
+}
+
+.topbar {
+    background: #171a21;
+    padding: 10px;
+    display: flex;
+    justify-content: space-between;
+}
+
+.container {
+    padding: 20px;
+    max-width: 1100px;
+    margin: auto;
+}
+
+input {
+    padding: 10px;
+    width: 70%;
+    background: #2a475e;
+    border: none;
+    color: white;
+}
+
+.card {
+    background: #2a475e;
+    padding: 20px;
+    margin-top: 20px;
+    border-radius: 5px;
+}
+
+.result-item {
+    padding: 10px;
+    cursor: pointer;
+}
+
+.result-item:hover {
+    background: #1b2838;
+}
+
+.price {
+    font-size: 28px;
+    color: #66c0f4;
+}
+
+.discount {
+    color: #a4d007;
+}
+
+.timer {
+    color: gold;
+    font-family: monospace;
+}
+
+.game-img {
+    width: 300px;
+}
+
+.trending {
+    display: inline-block;
+    margin: 10px;
+    cursor: pointer;
+}
+
+.trending img {
+    width: 150px;
+}
+</style>
+</head>
+
+<body>
+
+<div class="topbar">
+    <div>STEAM TRACKER PRO</div>
+    <div id="clock"></div>
+</div>
+
+<div class="container">
+
+<!-- LIVE SEARCH -->
+<input id="search" placeholder="Search any Steam game..." oninput="liveSearch()">
+<div id="searchResults" class="card" style="display:none;"></div>
+
+<!-- TRENDING -->
+<div class="card">
+    <h3>🔥 Trending Games</h3>
+    <div id="trending"></div>
+</div>
+
+<!-- GAME RESULT -->
+<div id="result" class="card" style="display:none;">
+    <h2 id="title"></h2>
+    <img id="image" class="game-img">
+    <div class="price" id="price"></div>
+    <div id="discount"></div>
+    <div id="saleTimer" class="timer"></div>
+    <a id="buyLink" target="_blank">Buy on Steam</a>
+</div>
+
+<!-- GRAPH -->
+<div class="card">
+    <h3>📊 Price History</h3>
+    <canvas id="chart"></canvas>
+</div>
+
+<!-- PREDICTION -->
+<div class="card">
+    <h3>Next Sale Prediction</h3>
+    <div id="prediction"></div>
+    <div id="countdown" class="timer"></div>
+</div>
+
+</div>
+
+<script>
+// CLOCK
+setInterval(() => {
+    document.getElementById("clock").innerText =
+        new Date().toLocaleString();
+}, 1000);
+
+// LIVE SEARCH (FUZZY)
+let searchTimeout;
+
+function liveSearch() {
+    clearTimeout(searchTimeout);
+
+    searchTimeout = setTimeout(async () => {
+        let query = document.getElementById("search").value.trim();
+
+        if (query.length < 2) {
+            document.getElementById("searchResults").style.display = "none";
+            return;
+        }
+
+        let res = await fetch(`https://steamcommunity.com/actions/SearchApps/${query}`);
+        let data = await res.json();
+
+        let container = document.getElementById("searchResults");
+        container.innerHTML = "";
+        container.style.display = "block";
+
+        if (!data.length) {
+            container.innerHTML = "No similar games found";
+            return;
+        }
+
+        data.sort((a, b) => {
+            return a.name.toLowerCase().indexOf(query.toLowerCase()) -
+                   b.name.toLowerCase().indexOf(query.toLowerCase());
+        });
+
+        data.slice(0, 8).forEach(game => {
+            let div = document.createElement("div");
+            div.className = "result-item";
+
+            div.innerHTML = `
+                <img src="https://cdn.cloudflare.steamstatic.com/steam/apps/${game.appid}/capsule_184x69.jpg"
+                style="width:120px; vertical-align:middle; margin-right:10px;">
+                ${game.name}
+            `;
+
+            div.onclick = () => {
+                fetchGame(game.appid);
+                container.style.display = "none";
+            };
+
+            container.appendChild(div);
+        });
+
+    }, 300);
+}
+
+// TRENDING
+let trendingGames = [730, 570, 440, 1174180, 1091500, 620];
+
+function loadTrending() {
+    let container = document.getElementById("trending");
+
+    trendingGames.forEach(id => {
+        let div = document.createElement("div");
+        div.className = "trending";
+
+        let img = document.createElement("img");
+        img.src = `https://cdn.cloudflare.steamstatic.com/steam/apps/${id}/capsule_184x69.jpg`;
+
+        div.appendChild(img);
+        div.onclick = () => fetchGame(id);
+
+        container.appendChild(div);
+    });
+}
+
+// FETCH GAME
+async function fetchGame(appid) {
+    let res = await fetch(`https://api.allorigins.win/raw?url=https://store.steampowered.com/api/appdetails?appids=${appid}`);
+    let data = await res.json();
+    let game = data[appid].data;
+
+    document.getElementById("result").style.display = "block";
+    document.getElementById("title").innerText = game.name;
+    document.getElementById("image").src =
+        `https://cdn.cloudflare.steamstatic.com/steam/apps/${appid}/header.jpg`;
+
+    if (!game.price_overview) {
+        document.getElementById("price").innerText = "Free";
+        return;
+    }
+
+    let price = game.price_overview.final / 100;
+    let discount = game.price_overview.discount_percent;
+
+    document.getElementById("price").innerText = "$" + price.toFixed(2);
+
+    if (discount > 0) {
+        document.getElementById("discount").innerHTML =
+            `<span class="discount">-${discount}% OFF</span>`;
+        startSaleTimer();
+    } else {
+        document.getElementById("discount").innerText = "No discount";
+    }
+
+    document.getElementById("buyLink").href =
+        `https://store.steampowered.com/app/${appid}`;
+
+    generateChart(price);
+}
+
+// SALE TIMER
+function startSaleTimer() {
+    let end = new Date();
+    end.setDate(end.getDate() + 7);
+
+    setInterval(() => {
+        let diff = end - new Date();
+
+        let d = Math.floor(diff/(1000*60*60*24));
+        let h = Math.floor((diff/(1000*60*60))%24);
+        let m = Math.floor((diff/(1000*60))%60);
+        let s = Math.floor((diff/1000)%60);
+
+        document.getElementById("saleTimer").innerText =
+            `${d}d ${h}h ${m}m ${s}s`;
+    },1000);
+}
+
+// GRAPH
+let chart;
+
+function generateChart(currentPrice) {
+    let ctx = document.getElementById("chart");
+
+    let data = [
+        currentPrice * 1.5,
+        currentPrice * 1.2,
+        currentPrice,
+        currentPrice * 0.8,
+        currentPrice
+    ];
+
+    if (chart) chart.destroy();
+
+    chart = new Chart(ctx, {
+        type: "line",
+        data: {
+            labels: ["Past","Sale","Now","Low","Now"],
+            datasets: [{
+                label: "Price History",
+                data: data,
+                borderColor: "#66c0f4"
+            }]
+        }
+    });
+}
+
+// PREDICTION TIMER (ms)
+let nextSale = new Date();
+nextSale.setDate(nextSale.getDate()+30);
+
+setInterval(()=>{
+    let diff = nextSale - new Date();
+
+    let d = Math.floor(diff/(1000*60*60*24));
+    let h = Math.floor((diff/(1000*60*60))%24);
+    let m = Math.floor((diff/(1000*60))%60);
+    let s = Math.floor((diff/1000)%60);
+    let ms = diff % 1000;
+
+    document.getElementById("prediction").innerText =
+        nextSale.toLocaleString();
+
+    document.getElementById("countdown").innerText =
+        `${d}d ${h}h ${m}m ${s}s ${ms}ms`;
+},50);
+
+// INIT
+loadTrending();
+</script>
+
+</body>
+</html>
