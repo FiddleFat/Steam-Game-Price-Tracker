@@ -2,9 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Steam Tracker Pro</title>
+<title>Steam Tracker Pro (Upgraded)</title>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fuse.js@6.6.2"></script>
 
 <style>
 body {
@@ -33,6 +34,7 @@ input {
     background: #2a475e;
     border: none;
     color: white;
+    outline: none;
 }
 
 .card {
@@ -45,29 +47,20 @@ input {
 .result-item {
     padding: 10px;
     cursor: pointer;
+    display:flex;
+    align-items:center;
+    gap:10px;
 }
 
 .result-item:hover {
     background: #1b2838;
 }
 
-.price {
-    font-size: 28px;
-    color: #66c0f4;
-}
+.price { font-size: 28px; color: #66c0f4; }
+.discount { color: #a4d007; }
+.timer { color: gold; font-family: monospace; }
 
-.discount {
-    color: #a4d007;
-}
-
-.timer {
-    color: gold;
-    font-family: monospace;
-}
-
-.game-img {
-    width: 300px;
-}
+.game-img { width: 300px; }
 
 .trending {
     display: inline-block;
@@ -75,8 +68,20 @@ input {
     cursor: pointer;
 }
 
-.trending img {
-    width: 150px;
+.trending img { width: 150px; }
+
+#searchResults {
+    position: absolute;
+    background: #2a475e;
+    width: 70%;
+    max-height: 300px;
+    overflow-y: auto;
+    display: none;
+    z-index: 999;
+}
+.loading {
+    padding: 10px;
+    color: #66c0f4;
 }
 </style>
 </head>
@@ -90,9 +95,11 @@ input {
 
 <div class="container">
 
-<!-- LIVE SEARCH -->
-<input id="search" placeholder="Search any Steam game..." oninput="liveSearch()">
-<div id="searchResults" class="card" style="display:none;"></div>
+<!-- SEARCH -->
+<div style="position:relative;">
+    <input id="search" placeholder="Search Steam games..." oninput="liveSearch()" autocomplete="off">
+    <div id="searchResults"></div>
+</div>
 
 <!-- TRENDING -->
 <div class="card">
@@ -100,13 +107,12 @@ input {
     <div id="trending"></div>
 </div>
 
-<!-- GAME RESULT -->
+<!-- GAME -->
 <div id="result" class="card" style="display:none;">
     <h2 id="title"></h2>
     <img id="image" class="game-img">
     <div class="price" id="price"></div>
     <div id="discount"></div>
-    <div id="saleTimer" class="timer"></div>
     <a id="buyLink" target="_blank">Buy on Steam</a>
 </div>
 
@@ -116,85 +122,108 @@ input {
     <canvas id="chart"></canvas>
 </div>
 
-<!-- PREDICTION -->
-<div class="card">
-    <h3>Next Sale Prediction</h3>
-    <div id="prediction"></div>
-    <div id="countdown" class="timer"></div>
-</div>
-
 </div>
 
 <script>
-// CLOCK
+
+/* ================= CLOCK ================= */
 setInterval(() => {
     document.getElementById("clock").innerText =
         new Date().toLocaleString();
 }, 1000);
 
-// LIVE SEARCH (FUZZY)
+/* ================= DATA ================= */
+let steamIndex = [];
+let fuse;
 let searchTimeout;
 
+/* ================= LOAD STEAM GAMES ================= */
+async function loadSteamGames() {
+    try {
+        const res = await fetch("https://api.steampowered.com/ISteamApps/GetAppList/v2/");
+        const data = await res.json();
+
+        steamIndex = data.applist.apps.map(g => ({
+            appid: g.appid,
+            name: g.name
+        }));
+
+        // 🔥 Fuse.js fuzzy search setup
+        fuse = new Fuse(steamIndex, {
+            keys: ["name"],
+            threshold: 0.35,
+            ignoreLocation: true
+        });
+
+        console.log("Loaded games:", steamIndex.length);
+
+    } catch (e) {
+        console.error("Steam load failed", e);
+    }
+}
+loadSteamGames();
+
+/* ================= FAST SEARCH ================= */
 function liveSearch() {
     clearTimeout(searchTimeout);
 
-    searchTimeout = setTimeout(async () => {
-        let query = document.getElementById("search").value.trim();
+    searchTimeout = setTimeout(() => {
+        const query = document.getElementById("search").value.trim();
+        const box = document.getElementById("searchResults");
 
-        if (query.length < 2) {
-            document.getElementById("searchResults").style.display = "none";
+        if (!fuse || query.length < 2) {
+            box.style.display = "none";
             return;
         }
 
-        let res = await fetch(`https://steamcommunity.com/actions/SearchApps/${query}`);
-        let data = await res.json();
+        box.style.display = "block";
+        box.innerHTML = "<div class='loading'>Searching...</div>";
 
-        let container = document.getElementById("searchResults");
-        container.innerHTML = "";
-        container.style.display = "block";
+        const results = fuse.search(query).slice(0, 8);
 
-        if (!data.length) {
-            container.innerHTML = "No similar games found";
+        box.innerHTML = "";
+
+        if (!results.length) {
+            box.innerHTML = "<div class='result-item'>No results</div>";
             return;
         }
 
-        data.sort((a, b) => {
-            return a.name.toLowerCase().indexOf(query.toLowerCase()) -
-                   b.name.toLowerCase().indexOf(query.toLowerCase());
-        });
+        for (const r of results) {
+            const game = r.item;
 
-        data.slice(0, 8).forEach(game => {
-            let div = document.createElement("div");
+            const div = document.createElement("div");
             div.className = "result-item";
 
             div.innerHTML = `
-                <img src="https://cdn.cloudflare.steamstatic.com/steam/apps/${game.appid}/capsule_184x69.jpg"
-                style="width:120px; vertical-align:middle; margin-right:10px;">
-                ${game.name}
+                <img loading="lazy"
+                     src="https://cdn.cloudflare.steamstatic.com/steam/apps/${game.appid}/capsule_184x69.jpg"
+                     width="120">
+                <div>${game.name}</div>
             `;
 
             div.onclick = () => {
                 fetchGame(game.appid);
-                container.style.display = "none";
+                box.style.display = "none";
             };
 
-            container.appendChild(div);
-        });
+            box.appendChild(div);
+        }
 
-    }, 300);
+    }, 120);
 }
 
-// TRENDING
+/* ================= TRENDING ================= */
 let trendingGames = [730, 570, 440, 1174180, 1091500, 620];
 
 function loadTrending() {
-    let container = document.getElementById("trending");
+    const container = document.getElementById("trending");
 
     trendingGames.forEach(id => {
-        let div = document.createElement("div");
+        const div = document.createElement("div");
         div.className = "trending";
 
-        let img = document.createElement("img");
+        const img = document.createElement("img");
+        img.loading = "lazy";
         img.src = `https://cdn.cloudflare.steamstatic.com/steam/apps/${id}/capsule_184x69.jpg`;
 
         div.appendChild(img);
@@ -203,15 +232,17 @@ function loadTrending() {
         container.appendChild(div);
     });
 }
+loadTrending();
 
-// FETCH GAME
+/* ================= GAME FETCH ================= */
 async function fetchGame(appid) {
-    let res = await fetch(`https://api.allorigins.win/raw?url=https://store.steampowered.com/api/appdetails?appids=${appid}`);
-    let data = await res.json();
-    let game = data[appid].data;
+    const res = await fetch(`https://store.steampowered.com/api/appdetails?appids=${appid}`);
+    const data = await res.json();
+    const game = data[appid].data;
 
     document.getElementById("result").style.display = "block";
     document.getElementById("title").innerText = game.name;
+
     document.getElementById("image").src =
         `https://cdn.cloudflare.steamstatic.com/steam/apps/${appid}/header.jpg`;
 
@@ -220,18 +251,12 @@ async function fetchGame(appid) {
         return;
     }
 
-    let price = game.price_overview.final / 100;
-    let discount = game.price_overview.discount_percent;
+    const price = game.price_overview.final / 100;
+    const discount = game.price_overview.discount_percent;
 
     document.getElementById("price").innerText = "$" + price.toFixed(2);
-
-    if (discount > 0) {
-        document.getElementById("discount").innerHTML =
-            `<span class="discount">-${discount}% OFF</span>`;
-        startSaleTimer();
-    } else {
-        document.getElementById("discount").innerText = "No discount";
-    }
+    document.getElementById("discount").innerText =
+        discount > 0 ? `-${discount}% OFF` : "No discount";
 
     document.getElementById("buyLink").href =
         `https://store.steampowered.com/app/${appid}`;
@@ -239,36 +264,18 @@ async function fetchGame(appid) {
     generateChart(price);
 }
 
-// SALE TIMER
-function startSaleTimer() {
-    let end = new Date();
-    end.setDate(end.getDate() + 7);
-
-    setInterval(() => {
-        let diff = end - new Date();
-
-        let d = Math.floor(diff/(1000*60*60*24));
-        let h = Math.floor((diff/(1000*60*60))%24);
-        let m = Math.floor((diff/(1000*60))%60);
-        let s = Math.floor((diff/1000)%60);
-
-        document.getElementById("saleTimer").innerText =
-            `${d}d ${h}h ${m}m ${s}s`;
-    },1000);
-}
-
-// GRAPH
+/* ================= CHART ================= */
 let chart;
 
-function generateChart(currentPrice) {
-    let ctx = document.getElementById("chart");
+function generateChart(price) {
+    const ctx = document.getElementById("chart");
 
-    let data = [
-        currentPrice * 1.5,
-        currentPrice * 1.2,
-        currentPrice,
-        currentPrice * 0.8,
-        currentPrice
+    const data = [
+        price * 1.4,
+        price * 1.2,
+        price,
+        price * 0.85,
+        price
     ];
 
     if (chart) chart.destroy();
@@ -276,38 +283,16 @@ function generateChart(currentPrice) {
     chart = new Chart(ctx, {
         type: "line",
         data: {
-            labels: ["Past","Sale","Now","Low","Now"],
+            labels: ["High", "Drop", "Now", "Low", "Now"],
             datasets: [{
-                label: "Price History",
-                data: data,
+                label: "Price Trend (simulated)",
+                data,
                 borderColor: "#66c0f4"
             }]
         }
     });
 }
 
-// PREDICTION TIMER (ms)
-let nextSale = new Date();
-nextSale.setDate(nextSale.getDate()+30);
-
-setInterval(()=>{
-    let diff = nextSale - new Date();
-
-    let d = Math.floor(diff/(1000*60*60*24));
-    let h = Math.floor((diff/(1000*60*60))%24);
-    let m = Math.floor((diff/(1000*60))%60);
-    let s = Math.floor((diff/1000)%60);
-    let ms = diff % 1000;
-
-    document.getElementById("prediction").innerText =
-        nextSale.toLocaleString();
-
-    document.getElementById("countdown").innerText =
-        `${d}d ${h}h ${m}m ${s}s ${ms}ms`;
-},50);
-
-// INIT
-loadTrending();
 </script>
 
 </body>
